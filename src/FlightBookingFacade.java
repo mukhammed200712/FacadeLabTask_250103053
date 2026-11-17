@@ -16,9 +16,7 @@ public class FlightBookingFacade {
     }
 
     /**
-     * Single entry point for booking a complete flight itinerary.
-     * Coordinates seat locking, baggage pricing, currency conversion,
-     * payment execution, rollback on failure, and ticket issuance.
+     * Backward-compatible entry point: delegates with the STANDARD loyalty tier.
      */
     public String bookFlight(String passengerName,
                              String flightCode,
@@ -28,6 +26,23 @@ public class FlightBookingFacade {
                              double bagWeightKg,
                              String currency,
                              String cardNumber) {
+        return bookFlight(passengerName, flightCode, seatNumber, baseFareUSD,
+                bagCount, bagWeightKg, currency, cardNumber, "STANDARD");
+    }
+
+    /**
+     * Single entry point for booking a complete flight itinerary,
+     * with loyalty tier handling (STANDARD, SILVER, GOLD).
+     */
+    public String bookFlight(String passengerName,
+                             String flightCode,
+                             String seatNumber,
+                             double baseFareUSD,
+                             int bagCount,
+                             double bagWeightKg,
+                             String currency,
+                             String cardNumber,
+                             String loyaltyTier) {
 
         String lockToken = null;
 
@@ -36,15 +51,23 @@ public class FlightBookingFacade {
             seatSystem.connectToReservationServer();
             lockToken = seatSystem.lockSeat(flightCode, seatNumber, passengerName);
 
-            // 2. Compute baggage fee in USD and add to base fare
-            double baggageFeeUSD = baggageEngine.calculateBaggageFeeUSD(bagCount, bagWeightKg);
+            // 2. Baggage fee: SILVER and GOLD are exempt, engine is skipped entirely
+            double baggageFeeUSD;
+            if ("SILVER".equalsIgnoreCase(loyaltyTier) || "GOLD".equalsIgnoreCase(loyaltyTier)) {
+                baggageFeeUSD = 0.0;
+            } else {
+                baggageFeeUSD = baggageEngine.calculateBaggageFeeUSD(bagCount, bagWeightKg);
+            }
             double totalUSD = baseFareUSD + baggageFeeUSD;
 
             // 3. Convert total into the target currency
             double convertedTotal = currencyConverter.convertFromUSD(totalUSD, currency);
 
-            // 4. Initialize payment gateway and charge the card
+            // 4. Initialize gateway, apply promo for SILVER, then charge the card
             paymentProcessor.initializeGateway();
+            if ("SILVER".equalsIgnoreCase(loyaltyTier)) {
+                paymentProcessor.applyPromoCode("SILVER-FREE-BAG");
+            }
             String receiptId = paymentProcessor.chargeCard(cardNumber, convertedTotal, currency);
 
             // 5. Generate and return the e-ticket
